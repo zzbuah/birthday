@@ -6,8 +6,8 @@
 <title>3D 粒子互动 · 手势控制</title>
 
 <!-- MediaPipe Hands / Camera（常规 script 引入，暴露全局 Hands / Camera） -->
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" onerror="this.src='https://unpkg.com/@mediapipe/hands/hands.js'"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" onerror="this.src='https://unpkg.com/@mediapipe/camera_utils/camera_utils.js'"></script>
 
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -126,7 +126,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font
 </style>
 
 <script type="importmap">
-{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
 </script>
 </head>
 <body>
@@ -556,7 +556,7 @@ function boot() {
   initHeart();
   setTextTargets(TEXTS.hello.pts); // 默认先显示 HELLO
 
-  const hands = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+  const hands = new Hands({ locateFile: f => `https://unpkg.com/@mediapipe/hands/${f}` });
   hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.5 });
   hands.onResults(onResults);
 

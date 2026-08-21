@@ -6,9 +6,9 @@
 <title>🐟 小鱼模式</title>
 
 <!-- MediaPipe Face Mesh + Hands -->
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" onerror="this.src='https://unpkg.com/@mediapipe/face_mesh/face_mesh.js'"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" onerror="this.src='https://unpkg.com/@mediapipe/hands/hands.js'"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" onerror="this.src='https://unpkg.com/@mediapipe/camera_utils/camera_utils.js'"></script>
 
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -881,7 +881,7 @@ async function boot() {
 
   // Face Mesh (用于眨眼检测)
   try {
-    faceMesh = new FaceMesh({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
+    faceMesh = new FaceMesh({ locateFile: f => `https://unpkg.com/@mediapipe/face_mesh/${f}` });
     faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: false, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
     let faceFrameCount = 0;
     faceMesh.onResults((res) => {
@@ -915,7 +915,7 @@ async function boot() {
 
   // Hands (用于水波 + 点击)
   try {
-    handsMP = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+    handsMP = new Hands({ locateFile: f => `https://unpkg.com/@mediapipe/hands/${f}` });
     handsMP.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.5 });
     handsMP.onResults((res) => {
       processHands(res);
