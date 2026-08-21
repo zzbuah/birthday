@@ -1,0 +1,962 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🐟 小鱼模式</title>
+
+<!-- MediaPipe Face Mesh + Hands -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: 'Microsoft YaHei', sans-serif; }
+
+/* 隐藏的 video 提供摄像头流 */
+#webcam { display: none; }
+
+/* 主显示 canvas：摄像头画面 + 鱼鱼 + 波纹 */
+#main-canvas {
+  position: fixed; inset: 0; width: 100%; height: 100%;
+  z-index: 1; display: block;
+}
+
+/* 加载/启动层 */
+#loading {
+  position: fixed; inset: 0; z-index: 100;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: radial-gradient(circle at 50% 40%, #1a3a5c 0%, #0a1525 70%);
+  color: #fff; text-align: center; gap: 18px;
+}
+#loading .logo { font-size: 30px; font-weight: 700; color: #5ec4ff; letter-spacing: 2px; }
+#loading .tip { font-size: 14px; color: rgba(255,255,255,0.7); line-height: 2; }
+#start-btn {
+  padding: 14px 48px; font-size: 17px; letter-spacing: 2px;
+  background: linear-gradient(135deg, #3ba0d9, #1a6fa8); color: #fff;
+  border: none; border-radius: 30px; cursor: pointer; transition: all .25s;
+  box-shadow: 0 6px 24px rgba(59,160,217,0.4);
+}
+#start-btn:hover { transform: scale(1.06); }
+#loading.hide { display: none; }
+#loading .err { color: #ff9a9a; font-size: 14px; }
+
+/* 信息面板 */
+#info {
+  position: fixed; top: 16px; left: 16px; z-index: 10;
+  background: rgba(10,20,40,0.5); color: #fff; padding: 12px 16px;
+  border-radius: 12px; font-size: 13px; line-height: 1.8;
+  backdrop-filter: blur(8px); border: 1px solid rgba(94,196,255,0.15);
+  user-select: none; pointer-events: none;
+}
+#info .title { font-size: 16px; font-weight: 700; color: #5ec4ff; margin-bottom: 4px; }
+#info .sub { font-size: 12px; color: rgba(255,255,255,0.6); }
+
+/* 返回按钮 */
+#back-btn {
+  position: fixed; top: 16px; right: 16px; z-index: 10;
+  background: rgba(10,20,40,0.5); color: #5ec4ff;
+  border: 1px solid rgba(94,196,255,0.2); border-radius: 12px;
+  padding: 10px 20px; font-size: 14px; cursor: pointer;
+  backdrop-filter: blur(8px); transition: all .2s;
+}
+#back-btn:hover { background: rgba(10,20,40,0.7); }
+
+/* 鱼计数 */
+#fish-count {
+  position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 10;
+  background: rgba(10,20,40,0.5); color: #5ec4ff;
+  padding: 8px 24px; border-radius: 20px; font-size: 14px; font-weight: 600;
+  backdrop-filter: blur(8px); border: 1px solid rgba(94,196,255,0.15);
+  pointer-events: none;
+}
+
+/* 音量控制 */
+#vol-control {
+  position: fixed; bottom: 20px; right: 20px;
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(10,20,40,0.5); backdrop-filter: blur(10px);
+  border: 1px solid rgba(94,196,255,0.15);
+  border-radius: 24px; padding: 8px 14px; z-index: 9999;
+}
+#vol-icon { color: #5ec4ff; cursor: pointer; display: flex; align-items: center; flex-shrink: 0; transition: color 0.2s; }
+#vol-icon:hover { color: #8fd4ff; }
+#vol-control.muted #vol-wave { display: none; }
+#vol-slider {
+  -webkit-appearance: none; appearance: none;
+  width: 80px; height: 4px; border-radius: 2px;
+  background: rgba(94,196,255,0.25); outline: none; cursor: pointer;
+}
+#vol-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: #5ec4ff; box-shadow: 0 0 6px rgba(94,196,255,0.6); cursor: pointer;
+}
+#vol-slider::-moz-range-thumb {
+  width: 14px; height: 14px; border-radius: 50%;
+  background: #5ec4ff; border: none; box-shadow: 0 0 6px rgba(94,196,255,0.6); cursor: pointer;
+}
+</style>
+</head>
+<body>
+
+<video id="webcam" autoplay playsinline muted></video>
+<canvas id="main-canvas"></canvas>
+
+<div id="info">
+  <div class="title">🐟 小鱼模式</div>
+  <div class="sub">眨眼 → 出现小鱼<br>手掌滑动 → 水波纹<br>手指点击 → 波纹散开</div>
+</div>
+<div id="fish-count">🐟 0</div>
+<div id="ear-display" style="position:fixed; top:150px; left:16px; z-index:10; background:rgba(10,20,40,0.5); color:#5ec4ff; padding:6px 12px; border-radius:8px; font-size:12px; backdrop-filter:blur(8px); pointer-events:none;">EAR: --</div>
+<a href="生日快乐.html?skip=choice" id="back-btn">← 返回</a>
+
+<div id="loading">
+  <div class="logo">🐟 小鱼模式</div>
+  <div class="tip">点击按钮授权摄像头，开启水下世界</div>
+  <button id="start-btn">启动</button>
+  <div class="tip" style="font-size:12px; opacity:.6;">
+    需在 Chrome / Edge 等浏览器中运行<br>
+    若摄像头被拦截，请用本地服务器打开（python -m http.server）
+  </div>
+</div>
+
+<!-- 音量控制 -->
+<div id="vol-control">
+  <div id="vol-icon" onclick="toggleMute()">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+      <path id="vol-wave" d="M15.54 8.46a5 5 0 0 1 0 7.07" stroke-opacity="0.9"></path>
+      <path d="M19.07 4.93a10 10 0 0 1 0 14.14" stroke-opacity="0.5"></path>
+    </svg>
+  </div>
+  <input type="range" id="vol-slider" min="0" max="100" value="40" oninput="onVolChange(this.value)">
+</div>
+
+<script>
+/* ========================================================================
+   音频引擎
+   ======================================================================== */
+let audioCtx = null;
+let masterGain = null;
+let userVolume = 0.4;
+let convolver = null; // 水下混响
+
+function getAudioCtx() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = userVolume;
+    // 创建简单的混响（卷积通过程序生成脉冲响应）
+    convolver = audioCtx.createConvolver();
+    const irLen = audioCtx.sampleRate * 1.5;
+    const ir = audioCtx.createBuffer(2, irLen, audioCtx.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const data = ir.getChannelData(ch);
+      for (let i = 0; i < irLen; i++) {
+        data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / irLen, 2.5);
+      }
+    }
+    convolver.buffer = ir;
+    masterGain.connect(audioCtx.destination);
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+
+function setUserVolume(v) {
+  userVolume = v;
+  if (masterGain) {
+    const ctx = audioCtx;
+    masterGain.gain.cancelScheduledValues(ctx.currentTime);
+    masterGain.gain.setValueAtTime(masterGain.gain.value, ctx.currentTime);
+    masterGain.gain.linearRampToValueAtTime(v, ctx.currentTime + 0.1);
+  }
+}
+
+// 播放随机音阶音符
+function playNote(freq, dur, vol) {
+  const ctx = getAudioCtx();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'triangle';
+  osc.frequency.setValueAtTime(freq, ctx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(freq * 0.98, ctx.currentTime + dur);
+  gain.gain.setValueAtTime(0, ctx.currentTime);
+  gain.gain.linearRampToValueAtTime(vol, ctx.currentTime + 0.03);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
+  osc.connect(gain).connect(masterGain);
+  osc.start();
+  osc.stop(ctx.currentTime + dur + 0.05);
+}
+
+// 五声音阶（C大调五声）
+const PENTA = [523.25, 587.33, 659.25, 783.99, 880.0, 1046.5, 1174.66, 1318.51];
+function playRandomNote() {
+  const freq = PENTA[Math.floor(Math.random() * PENTA.length)];
+  playNote(freq, 0.5 + Math.random() * 0.3, 0.15);
+}
+
+// 吐泡泡声：短促的低频pop + 高频气泡
+function playBubble() {
+  const ctx = getAudioCtx();
+  const vol = 0.08 + Math.random() * 0.12; // 大小不一
+  const baseFreq = 200 + Math.random() * 400;
+
+  // pop 主体
+  const osc1 = ctx.createOscillator();
+  const gain1 = ctx.createGain();
+  osc1.type = 'sine';
+  osc1.frequency.setValueAtTime(baseFreq, ctx.currentTime);
+  osc1.frequency.exponentialRampToValueAtTime(baseFreq * 2.5, ctx.currentTime + 0.04);
+  osc1.frequency.exponentialRampToValueAtTime(baseFreq * 0.5, ctx.currentTime + 0.12);
+  gain1.gain.setValueAtTime(0, ctx.currentTime);
+  gain1.gain.linearRampToValueAtTime(vol, ctx.currentTime + 0.01);
+  gain1.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+  osc1.connect(gain1).connect(masterGain);
+  osc1.start();
+  osc1.stop(ctx.currentTime + 0.2);
+
+  // 高频气泡装饰
+  const osc2 = ctx.createOscillator();
+  const gain2 = ctx.createGain();
+  osc2.type = 'sine';
+  osc2.frequency.setValueAtTime(baseFreq * 4, ctx.currentTime + 0.03);
+  osc2.frequency.exponentialRampToValueAtTime(baseFreq * 6, ctx.currentTime + 0.08);
+  gain2.gain.setValueAtTime(0, ctx.currentTime + 0.03);
+  gain2.gain.linearRampToValueAtTime(vol * 0.4, ctx.currentTime + 0.05);
+  gain2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.1);
+  osc2.connect(gain2).connect(masterGain);
+  osc2.start(ctx.currentTime + 0.03);
+  osc2.stop(ctx.currentTime + 0.15);
+}
+
+// 水波音效：随机频率的短促水滴声
+function playWaterDrop() {
+  const ctx = getAudioCtx();
+  const baseFreq = 300 + Math.random() * 600;
+  const dur = 0.15 + Math.random() * 0.15;
+  const vol = 0.1 + Math.random() * 0.08;
+
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(baseFreq * 2, ctx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(baseFreq, ctx.currentTime + 0.02);
+  osc.frequency.exponentialRampToValueAtTime(baseFreq * 0.4, ctx.currentTime + dur);
+  gain.gain.setValueAtTime(0, ctx.currentTime);
+  gain.gain.linearRampToValueAtTime(vol, ctx.currentTime + 0.008);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
+  osc.connect(gain).connect(masterGain);
+  osc.start();
+  osc.stop(ctx.currentTime + dur + 0.05);
+
+  // 第二层：低频尾音
+  const osc2 = ctx.createOscillator();
+  const gain2 = ctx.createGain();
+  osc2.type = 'sine';
+  osc2.frequency.setValueAtTime(baseFreq * 0.5, ctx.currentTime + 0.02);
+  osc2.frequency.exponentialRampToValueAtTime(baseFreq * 0.25, ctx.currentTime + dur);
+  gain2.gain.setValueAtTime(0, ctx.currentTime + 0.02);
+  gain2.gain.linearRampToValueAtTime(vol * 0.5, ctx.currentTime + 0.04);
+  gain2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
+  osc2.connect(gain2).connect(masterGain);
+  osc2.start(ctx.currentTime + 0.02);
+  osc2.stop(ctx.currentTime + dur + 0.05);
+}
+
+/* ========================================================================
+   音量控件
+   ======================================================================== */
+let prevVolume = 0.4;
+function onVolChange(val) {
+  const v = val / 100;
+  setUserVolume(v);
+  const control = document.getElementById('vol-control');
+  if (v === 0) control.classList.add('muted');
+  else { control.classList.remove('muted'); prevVolume = v; }
+}
+function toggleMute() {
+  const slider = document.getElementById('vol-slider');
+  const control = document.getElementById('vol-control');
+  if (userVolume > 0) {
+    prevVolume = userVolume;
+    slider.value = 0;
+    onVolChange(0);
+  } else {
+    const restore = Math.round(prevVolume * 100) || 40;
+    slider.value = restore;
+    onVolChange(restore);
+  }
+}
+
+/* ========================================================================
+   小鱼类
+   ======================================================================== */
+const FISH_EMOJIS = ['🐟', '🐠', '🐡', '🦐', '🦑', '🐙', '🐢'];
+const fishes = [];
+let fishTotalCount = 0;
+
+class Fish {
+  constructor() {
+    this.emoji = FISH_EMOJIS[Math.floor(Math.random() * FISH_EMOJIS.length)];
+    this.x = Math.random() * window.innerWidth;
+    this.y = Math.random() * window.innerHeight;
+    this.size = 28 + Math.random() * 28;
+    this.angle = Math.random() * Math.PI * 2;
+    this.speed = 0.5 + Math.random() * 1.5;
+    this.turnSpeed = 0.02 + Math.random() * 0.03;
+    this.age = 0;
+    this.spawnTime = performance.now();
+    this.opacity = 0;
+    this.wobble = Math.random() * Math.PI * 2;
+    this.bubbleTimer = 0;
+    this.bubbleInterval = 400 + Math.random() * 600;
+    this.verticalDrift = (Math.random() - 0.5) * 0.5;
+  }
+
+  update(dt) {
+    this.age = performance.now() - this.spawnTime;
+
+    // 淡入
+    if (this.age < 500) this.opacity = this.age / 500;
+    else this.opacity = 1;
+
+    // 自然游动：随机转向 + 摇摆
+    this.wobble += dt * 0.003;
+    this.angle += (Math.sin(this.wobble) * this.turnSpeed) + (Math.random() - 0.5) * 0.01;
+
+    // 边界反弹（平滑）
+    const margin = 60;
+    if (this.x < margin) this.angle = this.angle * 0.9 + 0 * 0.1; // 趋向右
+    if (this.x > window.innerWidth - margin) this.angle = this.angle * 0.9 + Math.PI * 0.1;
+    if (this.y < margin) this.angle = this.angle * 0.9 + (Math.PI / 2) * 0.1;
+    if (this.y > window.innerHeight - margin) this.angle = this.angle * 0.9 + (-Math.PI / 2) * 0.1;
+
+    // 实际简单边界处理
+    if (this.x < 0 || this.x > window.innerWidth || this.y < 0 || this.y > window.innerHeight) {
+      this.angle += Math.PI; // 掉头
+    }
+
+    this.x += Math.cos(this.angle) * this.speed * (dt / 16);
+    this.y += Math.sin(this.angle) * this.speed * (dt / 16) + this.verticalDrift;
+
+    // 限制范围
+    this.x = Math.max(20, Math.min(window.innerWidth - 20, this.x));
+    this.y = Math.max(20, Math.min(window.innerHeight - 20, this.y));
+
+    // 吐泡泡
+    this.bubbleTimer += dt;
+    if (this.bubbleTimer > this.bubbleInterval) {
+      this.bubbleTimer = 0;
+      this.bubbleInterval = 500 + Math.random() * 800;
+      playBubble();
+      bubbles.push(new Bubble(
+        this.x + Math.cos(this.angle) * this.size * 0.4,
+        this.y + Math.sin(this.angle) * this.size * 0.4
+      ));
+    }
+  }
+
+  draw(ctx) {
+    ctx.save();
+    ctx.globalAlpha = this.opacity;
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.angle);
+    // 鱼朝右时正常，朝左时需要垂直翻转（emoji 默认朝左）
+    if (Math.cos(this.angle) < 0) ctx.scale(1, -1);
+    ctx.font = this.size + 'px serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(this.emoji, 0, 0);
+    ctx.restore();
+  }
+
+}
+
+/* ========================================================================
+   气泡类
+   ======================================================================== */
+const bubbles = [];
+class Bubble {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.size = 3 + Math.random() * 8;
+    this.vy = -0.5 - Math.random() * 1.5;
+    this.vx = (Math.random() - 0.5) * 0.5;
+    this.opacity = 0.4 + Math.random() * 0.3;
+    this.dead = false;
+  }
+  update(dt) {
+    this.x += this.vx * (dt / 16);
+    this.y += this.vy * (dt / 16);
+    this.opacity -= 0.002 * (dt / 16);
+    if (this.opacity <= 0 || this.y < -10) this.dead = true;
+  }
+  draw(ctx) {
+    if (this.opacity <= 0) return;
+    ctx.save();
+    ctx.globalAlpha = this.opacity;
+    ctx.strokeStyle = 'rgba(200, 230, 255, 0.8)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+    ctx.stroke();
+    // 高光
+    ctx.beginPath();
+    ctx.arc(this.x - this.size * 0.3, this.y - this.size * 0.3, this.size * 0.3, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(220, 240, 255, 0.4)';
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+/* ========================================================================
+   水波纹（手掌滑动产生）
+   ======================================================================== */
+const waterRipples = [];
+class WaterRipple {
+  constructor(x, y, intensity) {
+    this.x = x;
+    this.y = y;
+    this.radius = 0;
+    this.maxRadius = 80 + intensity * 60;
+    this.life = 1; // 1→0
+    this.intensity = intensity;
+    this.dead = false;
+  }
+  update(dt) {
+    this.radius += (dt / 16) * 2.5;
+    this.life -= (dt / 16) * 0.02;
+    if (this.life <= 0 || this.radius > this.maxRadius) this.dead = true;
+  }
+  draw(ctx) {
+    if (this.life <= 0) return;
+    // 不画颜色！只用于位移计算，这里画一个极淡的白色圆环来隐约可见
+    ctx.save();
+    ctx.globalAlpha = this.life * 0.15;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 1)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+  getDisplacement(px, py) {
+    const dist = Math.hypot(px - this.x, py - this.y);
+    if (dist < this.radius && dist > this.radius - 20 && this.life > 0) {
+      const factor = Math.sin((this.radius - dist) / 20 * Math.PI) * this.life * this.intensity;
+      return factor;
+    }
+    return 0;
+  }
+}
+
+/* ========================================================================
+   点按波纹（手指点击产生）
+   ======================================================================== */
+const clickRipples = [];
+class ClickRipple {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.radius = 0;
+    this.maxRadius = 120 + Math.random() * 80;
+    this.life = 1;
+    this.dead = false;
+    this.rings = 3; // 多环波纹
+  }
+  update(dt) {
+    this.radius += (dt / 16) * 3.5;
+    this.life -= (dt / 16) * 0.015;
+    if (this.life <= 0 || this.radius > this.maxRadius) this.dead = true;
+  }
+  draw(ctx) {
+    if (this.life <= 0) return;
+    ctx.save();
+    // 多环扩散
+    for (let r = 0; r < this.rings; r++) {
+      const ringRadius = this.radius - r * 15;
+      if (ringRadius <= 0) continue;
+      const ringAlpha = this.life * (1 - r / this.rings) * 0.3;
+      ctx.globalAlpha = ringAlpha;
+      ctx.strokeStyle = 'rgba(255, 255, 255, 1)';
+      ctx.lineWidth = 1.5 - r * 0.3;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, ringRadius, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  getDisplacement(px, py) {
+    const dist = Math.hypot(px - this.x, py - this.y);
+    for (let r = 0; r < this.rings; r++) {
+      const ringR = this.radius - r * 15;
+      if (ringR <= 0) continue;
+      if (Math.abs(dist - ringR) < 12 && this.life > 0) {
+        const factor = Math.sin((12 - Math.abs(dist - ringR)) / 12 * Math.PI) * this.life * 3;
+        return { dx: (px - this.x) / dist * factor, dy: (py - this.y) / dist * factor };
+      }
+    }
+    return { dx: 0, dy: 0 };
+  }
+}
+
+/* ========================================================================
+   主程序
+   ======================================================================== */
+const videoEl = document.getElementById('webcam');
+const canvas = document.getElementById('main-canvas');
+const ctx2d = canvas.getContext('2d');
+const loadingEl = document.getElementById('loading');
+const startBtn = document.getElementById('start-btn');
+const fishCountEl = document.getElementById('fish-count');
+
+let cw = 0, ch = 0;
+function resizeCanvas() {
+  cw = canvas.width = window.innerWidth;
+  ch = canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// 用于水波变形的离屏 canvas
+const offCanvas = document.createElement('canvas');
+const offCtx = offCanvas.getContext('2d');
+
+/* ===== 眨眼检测 ===== */
+// Face Mesh 眼睛关键点索引（标准MediaPipe Face Mesh）
+// 左眼（用户左眼，画面右侧）: 外角33, 上眼睑159, 下眼睑145, 内角133, 上眼睑158, 下眼睑144
+// 右眼（用户右眼，画面左侧）: 外角263, 上眼睑386, 下眼睑374, 内角362, 上眼睑385, 下眼睑380
+const LEFT_EYE = [33, 159, 145, 133, 158, 144];
+const RIGHT_EYE = [263, 386, 374, 362, 385, 380];
+
+function eyeAspectRatio(landmarks, eyePoints) {
+  // p1=外角, p2=上1, p3=下1, p4=内角, p5=上2, p6=下2
+  // EAR = (|p2-p3| + |p5-p6|) / (2 * |p1-p4|)
+  const p1 = landmarks[eyePoints[0]];
+  const p2 = landmarks[eyePoints[1]];
+  const p3 = landmarks[eyePoints[2]];
+  const p4 = landmarks[eyePoints[3]];
+  const p5 = landmarks[eyePoints[4]];
+  const p6 = landmarks[eyePoints[5]];
+
+  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  const v1 = dist(p2, p3); // 垂直距离1（上眼睑-下眼睑）
+  const v2 = dist(p5, p6); // 垂直距离2
+  const h = dist(p1, p4);  // 水平距离（外角-内角）
+
+  if (h === 0) return 0;
+  return (v1 + v2) / (2 * h);
+}
+
+let earHistory = [];
+let blinkCooldown = 0;
+let blinkState = 'open'; // open | closing | closed
+let currentEAR = 0; // 调试用
+let earBaseline = 0; // 自动校准的睁眼基准值
+let earBaselineSamples = [];
+const EAR_OPEN_THRESHOLD_RATIO = 0.80;  // 睁眼恢复：>= 基准值*0.80
+const EAR_CLOSE_THRESHOLD_RATIO = 0.65; // 闭眼判定：< 基准值*0.65
+
+function detectBlink(landmarks) {
+  if (!landmarks || landmarks.length < 200) return false;
+  const leftEAR = eyeAspectRatio(landmarks, LEFT_EYE);
+  const rightEAR = eyeAspectRatio(landmarks, RIGHT_EYE);
+  const avgEAR = (leftEAR + rightEAR) / 2;
+  currentEAR = avgEAR;
+
+  // 前30帧自动校准睁眼基准值
+  if (earBaselineSamples.length < 30) {
+    earBaselineSamples.push(avgEAR);
+    if (earBaselineSamples.length === 30) {
+      // 取中位数作为基准（排除异常帧）
+      const sorted = [...earBaselineSamples].sort((a,b) => a - b);
+      earBaseline = sorted[15];
+      console.log('[小鱼] EAR 基准值校准完成:', earBaseline.toFixed(3));
+    }
+    return false;
+  }
+
+  const closeThreshold = earBaseline * EAR_CLOSE_THRESHOLD_RATIO;
+  const openThreshold = earBaseline * EAR_OPEN_THRESHOLD_RATIO;
+
+  // 更新调试显示
+  const earEl = document.getElementById('ear-display');
+  if (earEl) earEl.textContent = `EAR: ${avgEAR.toFixed(3)} | ${blinkState} | 闭:${closeThreshold.toFixed(2)} 开:${openThreshold.toFixed(2)}`;
+
+  if (blinkCooldown > 0) {
+    blinkCooldown--;
+    return false;
+  }
+
+  // 状态机：open → closed → open（一次完整眨眼）
+  if (blinkState === 'open' && avgEAR < closeThreshold) {
+    blinkState = 'closed';
+  } else if (blinkState === 'closed' && avgEAR >= openThreshold) {
+    blinkState = 'open';
+    blinkCooldown = 8; // 约0.25秒冷却，快速连眨也可触发
+    return true;
+  }
+
+  return false;
+}
+
+/* ===== 手部检测 ===== */
+let handsResults = null;
+let prevHandPos = null;
+let handMoveAccum = 0;
+
+function processHands(results) {
+  handsResults = results;
+}
+
+// 判断手指是否"点击"（指尖快速向下）
+let fingerDotPrev = null;
+let fingerDotCooldown = 0;
+
+function checkFingerDot(lm) {
+  if (!lm || lm.length < 21) return null;
+  // 食指尖 = landmark 8
+  const tip = lm[8];
+  const x = (1 - tip.x) * cw; // 镜像
+  const y = tip.y * ch;
+
+  if (fingerDotCooldown > 0) { fingerDotCooldown--; return null; }
+
+  if (fingerDotPrev) {
+    const dx = x - fingerDotPrev.x;
+    const dy = y - fingerDotPrev.y;
+    const speed = Math.hypot(dx, dy);
+    // 检测快速向下的小幅运动（点击）
+    if (dy > 8 && dy < 40 && Math.abs(dx) < 25 && speed > 12) {
+      fingerDotCooldown = 25;
+      fingerDotPrev = { x, y };
+      return { x, y };
+    }
+  }
+  fingerDotPrev = { x, y };
+  return null;
+}
+
+let palmPrevPos = null;
+
+function checkPalmSwipe(lm) {
+  if (!lm || lm.length < 21) return null;
+  // 手掌中心 = landmark 9 (中指根)
+  const palm = lm[9];
+  const x = (1 - palm.x) * cw; // 镜像
+  const y = palm.y * ch;
+
+  let swipe = null;
+  if (palmPrevPos) {
+    const dx = x - palmPrevPos.x;
+    const dy = y - palmPrevPos.y;
+    const speed = Math.hypot(dx, dy);
+    if (speed > 8) {
+      swipe = { x, y, dx, dy, speed };
+    }
+  }
+  palmPrevPos = { x, y };
+  return swipe;
+}
+
+/* ===== 渲染循环 ===== */
+let lastFrameTime = performance.now();
+let cameraReady = false;
+
+// 渲染降采样系数：水波变形在低分辨率下计算，再放大回主canvas
+const RIPPLE_SCALE = 0.5; // 变形计算用50%分辨率
+let rippleCanvas = document.createElement('canvas');
+let rippleCtx = rippleCanvas.getContext('2d');
+
+function render() {
+  const now = performance.now();
+  const dt = Math.min(now - lastFrameTime, 50);
+  lastFrameTime = now;
+
+  // 调整 offCanvas 大小
+  if (offCanvas.width !== cw || offCanvas.height !== ch) {
+    offCanvas.width = cw;
+    offCanvas.height = ch;
+  }
+
+  // 1. 先把摄像头画面画到 offCanvas（镜像）
+  offCtx.save();
+  offCtx.scale(-1, 1);
+  offCtx.drawImage(videoEl, -cw, 0, cw, ch);
+  offCtx.restore();
+
+  // 2. 处理手部 → 水波纹 + 点击波纹（只追踪第一只手，避免多手交叉干扰）
+  if (handsResults && handsResults.multiHandLandmarks && handsResults.multiHandLandmarks.length > 0) {
+    const lm = handsResults.multiHandLandmarks[0];
+    const dot = checkFingerDot(lm);
+    if (dot) {
+      clickRipples.push(new ClickRipple(dot.x, dot.y));
+      playWaterDrop();
+    }
+    const swipe = checkPalmSwipe(lm);
+    if (swipe) {
+      const intensity = Math.min(swipe.speed / 30, 1);
+      waterRipples.push(new WaterRipple(swipe.x, swipe.y, intensity));
+    }
+  } else {
+    palmPrevPos = null;
+    fingerDotPrev = null;
+  }
+
+  // 3. 更新波纹
+  for (let i = waterRipples.length - 1; i >= 0; i--) {
+    waterRipples[i].update(dt);
+    if (waterRipples[i].dead) waterRipples.splice(i, 1);
+  }
+  for (let i = clickRipples.length - 1; i >= 0; i--) {
+    clickRipples[i].update(dt);
+    if (clickRipples[i].dead) clickRipples.splice(i, 1);
+  }
+
+  // 4. 渲染：有波纹时做局域像素位移，无波纹时直接画
+  const hasRipples = waterRipples.length > 0 || clickRipples.length > 0;
+
+  if (hasRipples) {
+    // 先画正常画面到主canvas
+    ctx2d.drawImage(offCanvas, 0, 0);
+
+    // 在降采样分辨率下做位移变形
+    const rw = Math.max(1, Math.floor(cw * RIPPLE_SCALE));
+    const rh = Math.max(1, Math.floor(ch * RIPPLE_SCALE));
+    if (rippleCanvas.width !== rw || rippleCanvas.height !== rh) {
+      rippleCanvas.width = rw;
+      rippleCanvas.height = rh;
+    }
+
+    // 把 offCanvas 缩小画到 rippleCanvas
+    rippleCtx.drawImage(offCanvas, 0, 0, rw, rh);
+    const srcImg = rippleCtx.getImageData(0, 0, rw, rh);
+    const out = rippleCtx.createImageData(rw, rh);
+    const sD = srcImg.data;
+    const oD = out.data;
+
+    // 先把原始像素全部复制到输出（位移区域之外的像素保持不变）
+    oD.set(sD);
+
+    // 对每个波纹，在其影响的局域做位移
+    for (const r of waterRipples) {
+      const ri = r; // 缩放到ripple分辨率
+      const rx = ri.x * RIPPLE_SCALE;
+      const ry = ri.y * RIPPLE_SCALE;
+      const rr = ri.radius * RIPPLE_SCALE;
+      const bandW = 16 * RIPPLE_SCALE;
+
+      const x0 = Math.max(0, Math.floor(rx - rr - bandW));
+      const x1 = Math.min(rw, Math.ceil(rx + rr + bandW));
+      const y0 = Math.max(0, Math.floor(ry - rr - bandW));
+      const y1 = Math.min(rh, Math.ceil(ry + rr + bandW));
+
+      for (let py = y0; py < y1; py++) {
+        for (let px = x0; px < x1; px++) {
+          const dist = Math.hypot(px - rx, py - ry);
+          const ringDist = Math.abs(dist - rr);
+          if (ringDist < bandW && ri.life > 0) {
+            const factor = Math.sin((bandW - ringDist) / bandW * Math.PI) * ri.life * ri.intensity * 3;
+            if (Math.abs(factor) < 0.1) continue;
+            const angle = Math.atan2(py - ry, px - rx);
+            const dx = Math.round(Math.cos(angle) * factor);
+            const dy = Math.round(Math.sin(angle) * factor);
+            let sx = px + dx, sy = py + dy;
+            if (sx < 0) sx = 0; if (sx >= rw) sx = rw - 1;
+            if (sy < 0) sy = 0; if (sy >= rh) sy = rh - 1;
+            const si = (sy * rw + sx) * 4;
+            const oi = (py * rw + px) * 4;
+            oD[oi] = sD[si]; oD[oi+1] = sD[si+1]; oD[oi+2] = sD[si+2]; oD[oi+3] = 255;
+          }
+        }
+      }
+    }
+
+    for (const r of clickRipples) {
+      for (let ring = 0; ring < r.rings; ring++) {
+        const ringR = (r.radius - ring * 15) * RIPPLE_SCALE;
+        if (ringR <= 0) continue;
+        const rx = r.x * RIPPLE_SCALE;
+        const ry = r.y * RIPPLE_SCALE;
+        const bandW = 12 * RIPPLE_SCALE;
+
+        const x0 = Math.max(0, Math.floor(rx - ringR - bandW));
+        const x1 = Math.min(rw, Math.ceil(rx + ringR + bandW));
+        const y0 = Math.max(0, Math.floor(ry - ringR - bandW));
+        const y1 = Math.min(rh, Math.ceil(ry + ringR + bandW));
+
+        for (let py = y0; py < y1; py++) {
+          for (let px = x0; px < x1; px++) {
+            const dist = Math.hypot(px - rx, py - ry);
+            const ringDist = Math.abs(dist - ringR);
+            if (ringDist < bandW && r.life > 0) {
+              const factor = Math.sin((bandW - ringDist) / bandW * Math.PI) * r.life * 2;
+              if (Math.abs(factor) < 0.1) continue;
+              const angle = Math.atan2(py - ry, px - rx);
+              const dx = Math.round(Math.cos(angle) * factor);
+              const dy = Math.round(Math.sin(angle) * factor);
+              let sx = px + dx, sy = py + dy;
+              if (sx < 0) sx = 0; if (sx >= rw) sx = rw - 1;
+              if (sy < 0) sy = 0; if (sy >= rh) sy = rh - 1;
+              const si = (sy * rw + sx) * 4;
+              const oi = (py * rw + px) * 4;
+              oD[oi] = sD[si]; oD[oi+1] = sD[si+1]; oD[oi+2] = sD[si+2]; oD[oi+3] = 255;
+            }
+          }
+        }
+      }
+    }
+
+    // 把结果写回 rippleCtx，然后放大画到主canvas（只在有波纹的区域覆盖）
+    rippleCtx.putImageData(out, 0, 0);
+
+    // 找到所有波纹的包围盒，只在该区域放大绘制变形结果
+    let bx0 = cw, by0 = ch, bx1 = 0, by1 = 0;
+    for (const r of waterRipples) {
+      bx0 = Math.min(bx0, r.x - r.radius - 30);
+      by0 = Math.min(by0, r.y - r.radius - 30);
+      bx1 = Math.max(bx1, r.x + r.radius + 30);
+      by1 = Math.max(by1, r.y + r.radius + 30);
+    }
+    for (const r of clickRipples) {
+      const maxR = r.radius;
+      bx0 = Math.min(bx0, r.x - maxR - 30);
+      by0 = Math.min(by0, r.y - maxR - 30);
+      bx1 = Math.max(bx1, r.x + maxR + 30);
+      by1 = Math.max(by1, r.y + maxR + 30);
+    }
+    bx0 = Math.max(0, bx0 | 0); by0 = Math.max(0, by0 | 0);
+    bx1 = Math.min(cw, bx1 | 0); by1 = Math.min(ch, by1 | 0);
+
+    // 从 rippleCanvas 的对应区域放大画到主 canvas
+    const sw = (bx1 - bx0) * RIPPLE_SCALE;
+    const sh = (by1 - by0) * RIPPLE_SCALE;
+    const sx = bx0 * RIPPLE_SCALE;
+    const sy = by0 * RIPPLE_SCALE;
+    ctx2d.drawImage(rippleCanvas, sx, sy, sw, sh, bx0, by0, bx1 - bx0, by1 - by0);
+  } else {
+    ctx2d.drawImage(offCanvas, 0, 0);
+  }
+
+  // 5. 画波纹环（极淡白色）
+  for (const r of waterRipples) r.draw(ctx2d);
+  for (const r of clickRipples) r.draw(ctx2d);
+
+  // 6. 更新和绘制气泡
+  for (let i = bubbles.length - 1; i >= 0; i--) {
+    bubbles[i].update(dt);
+    if (bubbles[i].dead) { bubbles.splice(i, 1); continue; }
+    bubbles[i].draw(ctx2d);
+  }
+
+  // 7. 更新和绘制小鱼
+  for (let i = fishes.length - 1; i >= 0; i--) {
+    fishes[i].update(dt);
+    fishes[i].draw(ctx2d);
+  }
+
+  fishCountEl.textContent = '🐟 ' + fishTotalCount;
+  requestAnimationFrame(render);
+}
+
+/* ===== 启动摄像头 + MediaPipe ===== */
+let faceMesh = null;
+let handsMP = null;
+let cam = null;
+
+async function boot() {
+  if (typeof FaceMesh === 'undefined' || typeof Hands === 'undefined' || typeof Camera === 'undefined') {
+    loadingEl.innerHTML = '<div class="err">MediaPipe 资源加载失败，请检查网络后刷新</div>';
+    return;
+  }
+  loadingEl.innerHTML = '<div class="logo">🐟 小鱼模式</div><div class="tip">正在初始化…</div>';
+
+  getAudioCtx(); // 初始化音频上下文
+
+  const earEl = document.getElementById('ear-display');
+
+  // Face Mesh (用于眨眼检测)
+  try {
+    faceMesh = new FaceMesh({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
+    faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: false, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+    let faceFrameCount = 0;
+    faceMesh.onResults((res) => {
+      faceFrameCount++;
+      if (res.multiFaceLandmarks && res.multiFaceLandmarks[0]) {
+        const lm = res.multiFaceLandmarks[0];
+
+        if (detectBlink(lm)) {
+          const f = new Fish();
+          fishes.push(f);
+          fishTotalCount++;
+          playRandomNote();
+          playBubble();
+          for (let i = 0; i < 2 + Math.floor(Math.random() * 2); i++) {
+            bubbles.push(new Bubble(
+              f.x + (Math.random() - 0.5) * 30,
+              f.y + (Math.random() - 0.5) * 30
+            ));
+          }
+        }
+      } else {
+        const earEl2 = document.getElementById('ear-display');
+        if (earEl2) earEl2.textContent = `EAR: -- | 无人脸 | 帧:${faceFrameCount}`;
+      }
+    });
+    console.log('[小鱼] FaceMesh 初始化成功');
+  } catch(e) {
+    console.error('[小鱼] FaceMesh 初始化失败:', e);
+    if (earEl) earEl.textContent = `FaceMesh初始化失败: ${e.message || e}`;
+  }
+
+  // Hands (用于水波 + 点击)
+  try {
+    handsMP = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+    handsMP.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.5 });
+    handsMP.onResults((res) => {
+      processHands(res);
+    });
+    console.log('[小鱼] Hands 初始化成功');
+  } catch(e) {
+    console.error('[小鱼] Hands 初始化失败:', e);
+  }
+
+  let sendToggle = true;
+  let sendErrorCount = 0;
+  cam = new Camera(videoEl, {
+    onFrame: async () => {
+      try {
+        if (sendToggle) {
+          if (faceMesh) await faceMesh.send({ image: videoEl });
+        } else {
+          if (handsMP) await handsMP.send({ image: videoEl });
+        }
+      } catch(e) {
+        sendErrorCount++;
+        console.error('[小鱼] send 失败:', e);
+        if (earEl && sendErrorCount <= 3) earEl.textContent = `send错误: ${e.message || e} (${sendErrorCount})`;
+      }
+      sendToggle = !sendToggle;
+    },
+    width: 1280, height: 720,
+  });
+
+  cam.start().then(() => {
+    loadingEl.classList.add('hide');
+    cameraReady = true;
+  }).catch(e => {
+    loadingEl.innerHTML = `<div class="err">摄像头启动失败：${e.message || e}<br>请确认权限，或用本地服务器打开</div>`;
+  });
+
+  render();
+}
+
+startBtn.addEventListener('click', boot);
+</script>
+
+</body>
+</html>

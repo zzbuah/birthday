@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3D 粒子互动 · 手势控制</title>
+
+<!-- MediaPipe Hands / Camera（常规 script 引入，暴露全局 Hands / Camera） -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif; }
+
+/* 全屏摄像头背景（镜像） */
+#webcam {
+  position: fixed; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; transform: scaleX(-1);
+  z-index: 0; filter: saturate(1.1);
+}
+/* 半透明压暗层，让粒子更突出 */
+#overlay {
+  position: fixed; inset: 0; background: rgba(10,5,20,0.35);
+  z-index: 1; pointer-events: none;
+}
+/* 3D 画布 */
+#three-canvas { position: fixed; inset: 0; z-index: 2; pointer-events: none; }
+
+/* 信息面板 */
+#info {
+  position: fixed; top: 16px; left: 16px; z-index: 10;
+  background: rgba(10,8,25,0.55); color: #fff; padding: 14px 18px;
+  border-radius: 14px; font-size: 13px; line-height: 2;
+  backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.12);
+  min-width: 250px; user-select: none;
+}
+#info .title { font-size: 17px; font-weight: 700; color: #ff8fb3; letter-spacing: 1px; margin-bottom: 4px; }
+#info .state { color: #ffd6e5; }
+#info .sub { font-size: 12px; color: rgba(255,255,255,0.55); margin-top: 8px; line-height: 1.9; }
+
+/* 启动/加载层 */
+#loading {
+  position: fixed; inset: 0; z-index: 100;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: radial-gradient(circle at 50% 40%, #2a1b3d 0%, #0d0a1a 70%);
+  color: #fff; text-align: center; gap: 18px;
+}
+#loading .logo { font-size: 30px; font-weight: 700; color: #ff8fb3; letter-spacing: 2px; }
+#loading .tip { font-size: 14px; color: rgba(255,255,255,0.7); line-height: 2; }
+#start-btn {
+  padding: 14px 48px; font-size: 17px; letter-spacing: 2px;
+  background: linear-gradient(135deg, #ff5e9c, #ff2d7a); color: #fff;
+  border: none; border-radius: 30px; cursor: pointer; transition: all .25s;
+  box-shadow: 0 6px 24px rgba(255,45,122,0.4);
+}
+#start-btn:hover { transform: scale(1.06); }
+#loading.hide { display: none; }
+#loading .err { color: #ff9a9a; font-size: 14px; }
+
+/* ===== 音量控制 ===== */
+#vol-control {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(10, 8, 25, 0.6);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 143, 179, 0.2);
+  border-radius: 24px;
+  padding: 8px 14px;
+  z-index: 9999;
+}
+#vol-icon {
+  color: #ff8fb3;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  transition: color 0.2s;
+}
+#vol-icon:hover { color: #ffb3d1; }
+#vol-control.muted #vol-wave { display: none; }
+#vol-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 80px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 143, 179, 0.25);
+  outline: none;
+  cursor: pointer;
+}
+#vol-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ff8fb3;
+  box-shadow: 0 0 6px rgba(255, 143, 179, 0.6);
+  cursor: pointer;
+}
+#vol-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ff8fb3;
+  border: none;
+  box-shadow: 0 0 6px rgba(255, 143, 179, 0.6);
+  cursor: pointer;
+}
+
+/* 返回按钮 */
+#back-btn {
+  position: fixed; top: 16px; right: 16px; z-index: 10;
+  background: rgba(10,8,25,0.55); color: #ff8fb3;
+  border: 1px solid rgba(255,143,179,0.2); border-radius: 12px;
+  padding: 10px 20px; font-size: 14px; cursor: pointer;
+  backdrop-filter: blur(8px); transition: all .2s;
+  text-decoration: none;
+}
+#back-btn:hover { background: rgba(10,8,25,0.7); }
+</style>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+
+<video id="webcam" autoplay playsinline muted></video>
+<div id="overlay"></div>
+<canvas id="three-canvas"></canvas>
+
+<div id="info">
+  <div class="title">✦ 3D 粒子互动</div>
+  <div id="state-info" class="state">等待启动…</div>
+  <div class="sub">
+    左手 · 比 1 / 2 / 3 / 4 指 → 切换文字<br>
+    右手 · 握拳 → 收缩成心跳爱心<br>
+    右手 · 张开 → 扩散并随手腕旋转
+  </div>
+</div>
+<a href="生日快乐.html?skip=choice" id="back-btn">← 返回</a>
+
+<div id="loading">
+  <div class="logo">3D 粒子互动</div>
+  <div class="tip">点击按钮授权摄像头，开启手势控制体验</div>
+  <button id="start-btn">启动摄像头</button>
+  <div class="tip" style="font-size:12px; opacity:.6;">
+    需在 Chrome / Edge 等浏览器中运行<br>
+    若摄像头被系统拦截，请通过本地服务打开（如 python -m http.server）或允许 file:// 摄像头权限
+  </div>
+</div>
+
+<!-- 音量控制 -->
+<div id="vol-control">
+  <div id="vol-icon" onclick="toggleMute()">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+      <path id="vol-wave" d="M15.54 8.46a5 5 0 0 1 0 7.07" stroke-opacity="0.9"></path>
+      <path d="M19.07 4.93a10 10 0 0 1 0 14.14" stroke-opacity="0.5"></path>
+    </svg>
+  </div>
+  <input type="range" id="vol-slider" min="0" max="100" value="35" oninput="onVolChange(this.value)">
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+
+/* ================= 基础配置 ================= */
+const PARTICLE_COUNT = 15000;      // 粒子数量
+const TEXT_SCALE   = 0.05;         // 文字像素→世界单位
+const HEART_SCALE  = 0.55;         // 爱心缩放
+const CAM_DIST     = 32;           // 相机距离
+
+/* ================= 全局状态 ================= */
+const st = {
+  mode: 'text',          // text | heart | expanded
+  leftGesture: 0,        // 左手比出 1/2/3
+  rightFist: false,
+  rightOpen: false,
+  leftHand3D: null,
+  rightHand3D: null,
+  rotVel: 0,             // 右手旋转角速度
+  prevAngle: null,
+  gestureBuffer: [],     // 左手手势平滑缓冲（最近5帧）
+  time: 0,
+  ready: false,
+};
+
+/* ================= Three.js 初始化 ================= */
+const canvasEl = document.getElementById('three-canvas');
+const renderer = new THREE.WebGLRenderer({ canvas: canvasEl, alpha: true, antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+camera.position.set(0, 0, CAM_DIST);
+
+/* ================= 粒子数据 ================= */
+const pos = new Float32Array(PARTICLE_COUNT * 3);
+const col = new Float32Array(PARTICLE_COUNT * 3);
+const tgt = new Float32Array(PARTICLE_COUNT * 3);
+const vel = new Float32Array(PARTICLE_COUNT * 3);
+const siz = new Float32Array(PARTICLE_COUNT);
+const off = new Float32Array(PARTICLE_COUNT * 3); // 目标点附近随机偏移
+
+for (let i = 0; i < PARTICLE_COUNT; i++) {
+  pos[i*3]   = (Math.random() - 0.5) * 32;
+  pos[i*3+1] = (Math.random() - 0.5) * 22;
+  pos[i*3+2] = (Math.random() - 0.5) * 16;
+  // 颜色：粉白混合（约 75% 粉 / 25% 白）
+  if (Math.random() > 0.25) {
+    const t = Math.random();
+    col[i*3]   = 1.0;
+    col[i*3+1] = 0.45 + t * 0.25;
+    col[i*3+2] = 0.55 + t * 0.35;
+  } else {
+    col[i*3]   = 1.0;
+    col[i*3+1] = 0.96;
+    col[i*3+2] = 1.0;
+  }
+  siz[i] = 0.15 + Math.random() * 0.18;   // 小粒子
+  off[i*3]   = (Math.random() - 0.5) * 0.14;
+  off[i*3+1] = (Math.random() - 0.5) * 0.14;
+  off[i*3+2] = (Math.random() - 0.5) * 0.14;
+}
+
+const geo = new THREE.BufferGeometry();
+geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+geo.setAttribute('aColor',   new THREE.BufferAttribute(col, 3));
+geo.setAttribute('aSize',    new THREE.BufferAttribute(siz, 1));
+
+const mat = new THREE.ShaderMaterial({
+  uniforms: { uPR: { value: renderer.getPixelRatio() } },
+  vertexShader: `
+    attribute float aSize;
+    attribute vec3 aColor;
+    uniform float uPR;
+    varying vec3 vColor;
+    void main() {
+      vColor = aColor;
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      gl_PointSize = aSize * uPR * 420.0 / max(1.0, -mv.z);
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader: `
+    varying vec3 vColor;
+    void main() {
+      vec2 uv = gl_PointCoord - 0.5;
+      float d = length(uv);
+      if (d > 0.5) discard;
+      float a = smoothstep(0.5, 0.0, d);
+      gl_FragColor = vec4(vColor, a * 0.85);
+    }`,
+  transparent: true, depthWrite: false,
+  blending: THREE.AdditiveBlending,
+});
+scene.add(new THREE.Points(geo, mat));
+
+/* (辅助指示球已移除，保持画面干净) */
+
+/* ================= 文字采样 ================= */
+const tc = document.createElement('canvas');
+const tctx = tc.getContext('2d');
+
+function sampleText(text, fontSize, family) {
+  const ff = `bold ${fontSize}px ${family}, sans-serif`;
+  tctx.font = ff;
+  const w = Math.ceil(tctx.measureText(text).width) + 24;
+  const h = Math.ceil(fontSize * 1.5);
+  tc.width = w; tc.height = h;
+  tctx.font = ff;
+  tctx.fillStyle = '#fff';
+  tctx.textAlign = 'center'; tctx.textBaseline = 'middle';
+  tctx.fillText(text, w / 2, h / 2);
+  const d = tctx.getImageData(0, 0, w, h).data;
+  const pts = [];
+  const step = 2;
+  for (let y = 0; y < h; y += step)
+    for (let x = 0; x < w; x += step) {
+      if (d[(y * w + x) * 4 + 3] > 120) {
+        pts.push([
+          (x - w / 2) * TEXT_SCALE,
+          -(y - h / 2) * TEXT_SCALE,
+          (Math.random() - 0.5) * 1.2
+        ]);
+      }
+    }
+  return pts;
+}
+
+const TEXTS = {
+  hello:  { pts: null, label: 'HELLO' },
+  zhang:  { pts: null, label: '张先生' },
+  birf:   { pts: null, label: '生日快乐' },
+  glade:  { pts: null, label: '很高兴认识你' },
+};
+let currentText = '';
+
+function initTexts() {
+  TEXTS.hello.pts  = sampleText('HELLO', 140, 'Arial');
+  TEXTS.zhang.pts  = sampleText('张先生', 130, 'Microsoft YaHei');
+  TEXTS.birf.pts   = sampleText('生日快乐', 120, 'Microsoft YaHei');
+  TEXTS.glade.pts  = sampleText('很高兴认识你', 100, 'Microsoft YaHei');
+}
+
+/* ================= 3D 爱心生成 ================= */
+let heartPts = [];
+
+function initHeart() {
+  const s = HEART_SCALE;
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    const t = Math.random() * Math.PI * 2;
+    const f = Math.sqrt(Math.random()); // 面积均匀填充
+    const xb = 16 * Math.pow(Math.sin(t), 3);
+    const yb = 13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t);
+    // y 范围约 [-17, 5]，中心约 -6 → 加 6 使几何中心在原点
+    const x = f * xb * s;
+    const y = f * (yb + 6) * s;
+    // z 方向给出 3D 厚度：越靠近边缘越扁
+    const md = Math.sqrt(Math.max(0, 1 - f * f)) * 2.4 * s;
+    const z = (Math.random() * 2 - 1) * md;
+    heartPts.push([x, y, z]);
+  }
+}
+
+/* ================= 心跳函数 ================= */
+function heartbeat(t) {
+  const p = 60 / 72;               // 72 BPM
+  const ph = (t % p) / p;
+  let s = 1.0;
+  if (ph < 0.10) s += Math.sin(ph / 0.10 * Math.PI) * 0.18;          // lub (强烈收缩)
+  else if (ph > 0.16 && ph < 0.30) s += Math.sin((ph - 0.16) / 0.14 * Math.PI) * 0.10; // dub (次收缩)
+  return s;
+}
+
+/* ================= 目标设置 ================= */
+function setTextTargets(pts) {
+  const n = pts.length;
+  if (!n) return;
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    const p = pts[i % n];
+    tgt[i*3]   = p[0] + off[i*3];
+    tgt[i*3+1] = p[1] + off[i*3+1];
+    tgt[i*3+2] = p[2] + off[i*3+2];
+  }
+}
+
+function setHeartTargets() {
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    tgt[i*3] = heartPts[i][0];
+    tgt[i*3+1] = heartPts[i][1];
+    tgt[i*3+2] = heartPts[i][2];
+  }
+}
+
+function setExpandedTargets() {
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    const th = Math.random() * Math.PI * 2;
+    const ph = Math.acos(2 * Math.random() - 1);
+    const r = 10 + Math.random() * 8;
+    tgt[i*3]   = r * Math.sin(ph) * Math.cos(th);
+    tgt[i*3+1] = r * Math.sin(ph) * Math.sin(th);
+    tgt[i*3+2] = r * Math.cos(ph);
+  }
+}
+
+/* ================= 手势识别 ================= */
+function countFingers(lm) {
+  let n = 0;
+  const wrist = lm[0];
+  // 拇指：指尖(4)与食指根(5)的横向距离 — 拇指张开时明显偏离食指根
+  // 同时要求指尖比IP关节(2)更远离手腕，排除弯曲状态
+  const thumbSpread = Math.abs(lm[4].x - lm[5].x);
+  const thumbTipD = Math.hypot(lm[4].x - wrist.x, lm[4].y - wrist.y);
+  const thumbMcpD = Math.hypot(lm[2].x - wrist.x, lm[2].y - wrist.y);
+  if (thumbSpread > 0.06 && thumbTipD > thumbMcpD * 1.1) n++;
+  const tips = [8, 12, 16, 20];
+  const pips = [6, 10, 14, 18];
+  for (let i = 0; i < 4; i++) {
+    const td = Math.hypot(lm[tips[i]].x - wrist.x, lm[tips[i]].y - wrist.y);
+    const pd = Math.hypot(lm[pips[i]].x - wrist.x, lm[pips[i]].y - wrist.y);
+    if (td > pd * 1.15) n++;
+  }
+  return n;
+}
+
+function handAngle(lm) {
+  return Math.atan2(lm[9].y - lm[0].y, lm[9].x - lm[0].x);
+}
+
+/* 2D 关键点 → 3D（镜像对齐：x 取反，匹配镜像显示） */
+function to3D(lm) {
+  const p = lm[9];
+  return { x: (0.5 - p.x) * 16, y: -(p.y - 0.5) * 12, z: 0 };
+}
+
+/* ================= MediaPipe 回调 ================= */
+function onResults(res) {
+  st.leftHand3D = null;
+  st.rightHand3D = null;
+  st.rightFist = st.rightOpen = false;
+  st.rotVel *= 0.82; // 角速度衰减
+
+  if (res.multiHandLandmarks && res.multiHandedness) {
+    for (let hi = 0; hi < res.multiHandLandmarks.length; hi++) {
+      const lm = res.multiHandLandmarks[hi];
+      const p3 = to3D(lm);
+      const fc = countFingers(lm);
+      // 用 MediaPipe handedness 标签判断左右手
+      // 摄像头画面通过 CSS transform: scaleX(-1) 镜像显示，但 MediaPipe 处理原始未镜像帧
+      // MediaPipe 假设输入是镜像的，因此 handedness 标签需要翻转：Right→左手, Left→右手
+      const handLabel = res.multiHandedness[hi]?.label || '';
+      const isLeft = handLabel === 'Right';
+      if (isLeft) {
+        st.leftHand3D = p3;
+        let g = 0;
+        if (fc === 1) g = 1;
+        else if (fc === 2) g = 2;
+        else if (fc === 3) g = 3;
+        else if (fc >= 4) g = 4;
+        // 5帧缓冲 + 多数投票，需≥3帧一致才切换
+        st.gestureBuffer.push(g);
+        if (st.gestureBuffer.length > 5) st.gestureBuffer.shift();
+        const cnt = {0:0,1:0,2:0,3:0,4:0};
+        for (const v of st.gestureBuffer) cnt[v]++;
+        let bestG = 0, bestC = 0;
+        for (let k = 0; k <= 4; k++) { if (cnt[k] > bestC) { bestC = cnt[k]; bestG = k; } }
+        if (bestC >= 3) st.leftGesture = bestG;
+      } else {
+        st.rightHand3D = p3;
+        st.rightFist = fc <= 1;
+        st.rightOpen = fc >= 4;
+        const a = handAngle(lm);
+        if (st.prevAngle !== null) {
+          let d = a - st.prevAngle;
+          if (d > Math.PI) d -= Math.PI * 2;
+          if (d < -Math.PI) d += Math.PI * 2;
+          st.rotVel = st.rotVel * 0.6 + d * 0.4;
+        }
+        st.prevAngle = a;
+      }
+    }
+  }
+  if (!st.rightHand3D) st.prevAngle = null;
+  if (!st.leftHand3D) { st.gestureBuffer = []; st.leftGesture = 0; }
+}
+
+/* ================= 模式切换 ================= */
+function updateMode() {
+  if (st.rightFist) {
+    if (st.mode !== 'heart') { st.mode = 'heart'; setHeartTargets(); }
+  } else if (st.rightOpen) {
+    if (st.mode !== 'expanded') { st.mode = 'expanded'; setExpandedTargets(); }
+  } else {
+    if (st.mode !== 'text') { st.mode = 'text'; currentText = ''; }
+    const map = { 1: 'hello', 2: 'zhang', 3: 'birf', 4: 'glade' };
+    const key = map[st.leftGesture];
+    if (key && currentText !== key) { currentText = key; setTextTargets(TEXTS[key].pts); }
+  }
+}
+
+/* ================= 粒子更新 ================= */
+function updateParticles(dt) {
+  const isHeart = st.mode === 'heart';
+  const isExpand = st.mode === 'expanded';
+  const lerp = isHeart ? 0.085 : (isExpand ? 0.015 : 0.042);
+  const damp = isHeart ? 0.78 : (isExpand ? 0.972 : 0.88); // 爱心模式更快收敛
+  const hb = isHeart ? heartbeat(st.time) : 1.0;
+
+  // 扩散模式：随右手旋转方向旋转目标
+  if (isExpand && Math.abs(st.rotVel) > 0.0003) {
+    const a = st.rotVel * 0.8, c = Math.cos(a), s2 = Math.sin(a);
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      const ix = i*3, iz = ix+2;
+      const tx = tgt[ix], tz = tgt[iz];
+      tgt[ix] = tx * c - tz * s2;
+      tgt[iz] = tx * s2 + tz * c;
+    }
+  }
+
+  const lh = null;
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    const i3 = i * 3;
+    const tx = tgt[i3] * hb, ty = tgt[i3+1] * hb, tz = tgt[i3+2] * hb;
+
+    vel[i3]   += (tx - pos[i3])   * lerp;
+    vel[i3+1] += (ty - pos[i3+1]) * lerp;
+    vel[i3+2] += (tz - pos[i3+2]) * lerp;
+
+    vel[i3]   *= damp;
+    vel[i3+1] *= damp;
+    vel[i3+2] *= damp;
+
+    pos[i3]   += vel[i3];
+    pos[i3+1] += vel[i3+1];
+    pos[i3+2] += vel[i3+2];
+  }
+
+  geo.attributes.position.needsUpdate = true;
+}
+
+/* ================= 信息面板 ================= */
+const stateEl = document.getElementById('state-info');
+let infoTimer = 0;
+function updateInfo() {
+  let m = '文字模式';
+  if (st.mode === 'heart') m = '❤ 爱心模式（心跳中）';
+  else if (st.mode === 'expanded') m = '扩散旋转模式';
+  else if (st.leftGesture === 1) m = '文字：HELLO';
+  else if (st.leftGesture === 2) m = '文字：张先生';
+  else if (st.leftGesture === 3) m = '文字：生日快乐';
+  else if (st.leftGesture === 4) m = '文字：很高兴认识你';
+  stateEl.innerHTML =
+    `模式：${m}<br>` +
+    `左手：${st.leftHand3D ? '已识别' : '未识别'}　右手：${st.rightHand3D ? '已识别' : '未识别'}` +
+    (st.leftGesture ? `　手势：${st.leftGesture}` : '');
+}
+
+/* ================= 主循环 ================= */
+const clock = new THREE.Clock();
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  st.time += dt;
+  if (st.ready) updateMode();
+  updateParticles(dt);
+  if (++infoTimer % 10 === 0) updateInfo();
+  renderer.render(scene, camera);
+}
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+/* ================= 启动 ================= */
+const videoEl = document.getElementById('webcam');
+const loadingEl = document.getElementById('loading');
+const startBtn = document.getElementById('start-btn');
+
+function boot() {
+  if (typeof Hands === 'undefined' || typeof Camera === 'undefined') {
+    loadingEl.innerHTML = '<div class="err">MediaPipe 资源加载失败，请检查网络后刷新</div>';
+    return;
+  }
+  loadingEl.innerHTML = '<div class="logo">正在初始化…</div><div class="tip">加载手势模型与粒子系统</div>';
+  initTexts();
+  initHeart();
+  setTextTargets(TEXTS.hello.pts); // 默认先显示 HELLO
+
+  const hands = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+  hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.5 });
+  hands.onResults(onResults);
+
+  const cam = new Camera(videoEl, {
+    onFrame: async () => { await hands.send({ image: videoEl }); },
+    width: 1280, height: 720,
+  });
+  cam.start().then(() => {
+    loadingEl.classList.add('hide');
+    st.ready = true;
+  }).catch(e => {
+    loadingEl.innerHTML = `<div class="err">摄像头启动失败：${e.message || e}<br>请确认权限，或用本地服务器打开（python -m http.server）</div>`;
+  });
+  animate();
+}
+startBtn.addEventListener('click', boot);
+</script>
+
+<!-- 音量控制 + 环境音乐 -->
+<script>
+let audioCtx = null;
+let masterGain = null;
+let userVolume = 0.35;
+let bgmStarted = false;
+let bgmTimerIDs = [];
+
+function getAudioCtx() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = userVolume;
+    masterGain.connect(audioCtx.destination);
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+
+function setUserVolume(v) {
+  userVolume = v;
+  if (masterGain) {
+    const ctx = audioCtx;
+    masterGain.gain.cancelScheduledValues(ctx.currentTime);
+    masterGain.gain.setValueAtTime(masterGain.gain.value, ctx.currentTime);
+    masterGain.gain.linearRampToValueAtTime(v, ctx.currentTime + 0.1);
+  }
+}
+
+// 环境背景音乐：柔和泛音pad
+function startBGM() {
+  if (bgmStarted) return;
+  bgmStarted = true;
+  const ctx = getAudioCtx();
+  const mg = masterGain;
+
+  // 和弦频率（Am - F - C - G 循环）
+  const chords = [
+    [220, 261.63, 329.63],   // Am
+    [174.61, 220, 261.63],   // F
+    [261.63, 329.63, 392],   // C
+    [196, 246.94, 293.66],   // G
+  ];
+  const chordDur = 4;
+  let idx = 0;
+
+  function playChord() {
+    const chord = chords[idx % chords.length];
+    const start = ctx.currentTime;
+    chord.forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = i === 0 ? 'sine' : 'triangle';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0, start);
+      gain.gain.linearRampToValueAtTime(0.06, start + 1.5);
+      gain.gain.linearRampToValueAtTime(0.04, start + chordDur * 0.7);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + chordDur);
+      osc.connect(gain).connect(mg);
+      osc.start(start);
+      osc.stop(start + chordDur + 0.1);
+    });
+    idx++;
+    const id = setTimeout(playChord, chordDur * 1000);
+    bgmTimerIDs.push(id);
+  }
+  playChord();
+}
+
+function onVolChange(val) {
+  const v = val / 100;
+  setUserVolume(v);
+  const control = document.getElementById('vol-control');
+  if (v === 0) {
+    control.classList.add('muted');
+  } else {
+    control.classList.remove('muted');
+    if (!bgmStarted) startBGM();
+  }
+}
+
+let prevVolume = 0.35;
+function toggleMute() {
+  const slider = document.getElementById('vol-slider');
+  const control = document.getElementById('vol-control');
+  if (userVolume > 0) {
+    prevVolume = userVolume;
+    slider.value = 0;
+    onVolChange(0);
+  } else {
+    const restore = Math.round(prevVolume * 100) || 35;
+    slider.value = restore;
+    onVolChange(restore);
+  }
+}
+</script>
+
+</body>
+</html>
