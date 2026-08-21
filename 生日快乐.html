@@ -1484,12 +1484,12 @@ function showFinal() {
 // 互动模式：切激情音乐→跳转
 function goInteractive() {
   stopMusic();
-  setTimeout(() => { window.location.href = '3D粒子互动.html'; }, 300);
+  setTimeout(() => { window.location.href = encodeURIComponent('3D粒子互动.html'); }, 300);
 }
 
 function goFishMode() {
   stopMusic();
-  setTimeout(() => { window.location.href = '小鱼模式.html'; }, 300);
+  setTimeout(() => { window.location.href = encodeURIComponent('小鱼模式.html'); }, 300);
 }
 
 // ===== 祝福信件 =====
